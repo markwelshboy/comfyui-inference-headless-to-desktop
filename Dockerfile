@@ -27,8 +27,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 ENV PATH="${VENV}/bin:${PATH}"
 
 # ---- pip tooling ----
+# Upgrade pip/setuptools/wheel to latest compatible versions to avoid old versions that don't understand the new metadata formats
+# Note that we have to do this before installing any packages, otherwise old pip/setuptools may install older versions of 
+# packages that then conflict with the newer pip/setuptools.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -U "pip<25.2" setuptools wheel
+    pip install -U "pip<25.2" "setuptools>=66.1,<82" "wheel>=0.38"
 
 # ---- Constraints ----
 COPY pip.conf /etc/pip.conf

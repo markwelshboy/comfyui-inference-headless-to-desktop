@@ -40,3 +40,10 @@ safetensors==0.7.0
 # transformers==4.57.6
 # diffusers==0.36.0
 # tokenizers==0.22.2
+
+# ================================================================
+# Pull in latest pip/setuptools to avoid old versions that don't understand the new metadata formats
+# ================================================================
+
+setuptools>=66.1,<82
+wheel>=0.38
