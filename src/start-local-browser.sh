@@ -7,7 +7,7 @@ export DISPLAY=":${DISPLAY_NUM}"
 SCREEN_GEOM="${SCREEN_GEOM:-1440x900x24}"
 NOVNC_PORT="${NOVNC_PORT:-8988}"
 VNC_PORT="${VNC_PORT:-5090}"
-START_URL="${START_URL:-http://127.0.0.1:8188}"
+START_URL="${START_URL:-http://127.0.0.1:8288}"
 
 # Use Chrome by default; override if you want something else
 BROWSER_CMD="${BROWSER_CMD:-google-chrome --no-sandbox --disable-gpu --disable-gpu-compositing}"
@@ -188,6 +188,16 @@ Logs:
 EOF
 }
 
+# preemptively kill any existing processes that might conflict (ignore errors)
+prevent_port_conflicts() {
+  pkill -f "websockify.*${NOVNC_PORT}" || true
+  pkill -f "x11vnc.*${VNC_PORT}" || true
+  pkill -x openbox || true
+  pkill -f "Xvfb ${DISPLAY}" || true
+  pkill -f "google-chrome|chromium|firefox" || true
+  sleep 1
+}
+
 # Sanity checks for required binaries
 for bin in Xvfb openbox x11vnc websockify curl bash; do
   if ! have_cmd "$bin"; then
@@ -195,6 +205,8 @@ for bin in Xvfb openbox x11vnc websockify curl bash; do
     exit 1
   fi
 done
+
+prevent_port_conflicts
 
 start_xvfb
 sleep 1
