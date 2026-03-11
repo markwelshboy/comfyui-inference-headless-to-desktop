@@ -27,9 +27,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 ENV PATH="${VENV}/bin:${PATH}"
 
 # ---- pip tooling ----
-# Upgrade pip/setuptools/wheel to latest compatible versions to avoid old versions that don't understand the new metadata formats
-# Note that we have to do this before installing any packages, otherwise old pip/setuptools may install older versions of 
-# packages that then conflict with the newer pip/setuptools.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -U "pip<25.2" "setuptools>=66.1,<82" "wheel>=0.38"
 
@@ -91,10 +88,7 @@ PY
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -c /opt/constraints.txt -r /tmp/requirements.notorch.txt
 
-# Copy the upscaler
 COPY 4xLSDIR.pth /
-
-# Thin startup wrapper
 COPY src/start_script.sh /start_script.sh
 RUN chmod +x /start_script.sh
 
@@ -107,14 +101,13 @@ EXPOSE 22 8188 8288 8388 8888
 ENTRYPOINT ["/start_script.sh"]
 
 # -------------------------------------------------------------------
-# Browser target: Firefox + VNC/noVNC
+# Shared GUI plumbing
 # -------------------------------------------------------------------
-FROM runtime-base AS browser
+FROM runtime-base AS gui-base
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
       xvfb \
-      openbox \
       x11vnc \
       novnc \
       websockify \
@@ -124,14 +117,28 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       libgl1-mesa-dri \
       wget \
       gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+EXPOSE 22 8188 8288 8388 8888 8988 5090
+ENTRYPOINT ["/start_script.sh"]
+
+# -------------------------------------------------------------------
+# Browser target: gui-base + openbox + Chrome
+# -------------------------------------------------------------------
+FROM gui-base AS browser
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+      openbox \
     && install -d -m 0755 /etc/apt/keyrings \
     && wget -qO- https://dl.google.com/linux/linux_signing_key.pub \
-       | gpg --dearmor -o /etc/apt/keyrings/google-chrome.gpg \
+       | gpg --batch --yes --no-tty --dearmor -o /etc/apt/keyrings/google-chrome.gpg \
     && chmod a+r /etc/apt/keyrings/google-chrome.gpg \
     && echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
        > /etc/apt/sources.list.d/google-chrome.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends google-chrome-stable \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 COPY src/start-local-browser.sh /usr/local/bin/start-local-browser
@@ -159,7 +166,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       xfdesktop4 \
       xfce4-taskmanager \
       tango-icon-theme \
-      dbus-x11 \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 COPY src/start-local-desktop.sh /usr/local/bin/start-local-desktop
@@ -168,4 +175,3 @@ RUN chmod +x /usr/local/bin/start-local-desktop /usr/local/bin/stop-local-deskto
 
 EXPOSE 22 8188 8288 8388 8888 8988 5090
 ENTRYPOINT ["/start_script.sh"]
-

@@ -11,8 +11,9 @@ Options:
   --load                 Load into local docker (implies --no-push)
   --platform <plats>     Default: linux/amd64
   --no-cache             Disable build cache
-  --prune                Safe-ish prune before build
-  --prune-hard           Aggressive prune before build (docker system prune -af)
+  --prune                Safe-ish prune before build (keeps builder cache)
+  --prune-hard           Aggressive prune before build (includes builder cache)
+  --all-targets          Build final, browser, and desktop targets
 
 Tagging:
   --image <repo/name>    Default: markwelshboy/comfyui-inference
@@ -21,10 +22,11 @@ Tagging:
 Target stage:
   --target <stage>       Build a specific Dockerfile stage (optional).
                          If omitted, script will prefer 'final' if it exists,
-                         otherwise builds the default final stage with no --target.
+                         otherwise builds the Dockerfile's last stage.
+                         Ignored when --all-targets is used.
 
 Metadata:
-  --image-version <v>    Default: 0.1.0
+  --image-version <v>    Default: 1.0.0
   --build-date <iso>     Default: now UTC
   --vcs-ref <sha>        Default: git rev-parse --short HEAD or "unknown"
 
@@ -36,8 +38,9 @@ Examples:
   ./build_comfy_infer.sh
   ./build_comfy_infer.sh --no-push
   ./build_comfy_infer.sh --load
-  ./build_comfy_infer.sh --target sanity --no-push
-  ./build_comfy_infer.sh --dockerfile Dockerfile.sanity --no-push
+  ./build_comfy_infer.sh --target browser --no-push
+  ./build_comfy_infer.sh --all-targets
+  ./build_comfy_infer.sh --all-targets --push
 EOF
 }
 
@@ -45,7 +48,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 # Defaults
-IMAGE="markwelshboy/comfyui-inference-browser"
+IMAGE="markwelshboy/comfyui-inference"
 TAG="latest"
 DOCKERFILE="Dockerfile"
 
@@ -55,6 +58,7 @@ PLATFORM="linux/amd64"
 NO_CACHE=false
 PRUNE=false
 PRUNE_HARD=false
+ALL_TARGETS=false
 
 TARGET=""
 
@@ -73,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --no-cache) NO_CACHE=true; shift ;;
     --prune) PRUNE=true; shift ;;
     --prune-hard) PRUNE_HARD=true; shift ;;
+    --all-targets) ALL_TARGETS=true; shift ;;
     --image) [[ -n "${2:-}" ]] || die "--image requires a value"; IMAGE="$2"; shift 2 ;;
     --tag) [[ -n "${2:-}" ]] || die "--tag requires a value"; TAG="$2"; shift 2 ;;
     --dockerfile) [[ -n "${2:-}" ]] || die "--dockerfile requires a path"; DOCKERFILE="$2"; shift 2 ;;
@@ -88,11 +93,17 @@ done
 
 have_cmd docker || die "docker not found"
 sudo docker buildx version >/dev/null 2>&1 || die "docker buildx not available"
+[[ -f "${DOCKERFILE}" ]] || die "Dockerfile not found: ${DOCKERFILE}"
+
+if $ALL_TARGETS && [[ -n "${TARGET}" ]]; then
+  die "--target cannot be used together with --all-targets"
+fi
 
 # Metadata defaults
 if [[ -z "${BUILD_DATE}" ]]; then
   BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
+
 if [[ -z "${VCS_REF}" ]]; then
   if have_cmd git && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     VCS_REF="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -101,29 +112,35 @@ if [[ -z "${VCS_REF}" ]]; then
   fi
 fi
 
-# If user didn't specify --target, prefer "final" only if it exists.
-# Otherwise, omit --target entirely (build default final stage = last stage).
-detect_target_if_any() {
-  [[ -n "${TARGET}" ]] && return 0
-
-  # Look for stage names in the Dockerfile
-  # e.g. "FROM ... AS final"
-  local stages
-  stages="$(grep -E '^[[:space:]]*FROM[[:space:]].*[[:space:]]+AS[[:space:]]+' "${DOCKERFILE}" \
+# Discover stages
+detect_stages() {
+  grep -E '^[[:space:]]*FROM[[:space:]].*[[:space:]]+AS[[:space:]]+' "${DOCKERFILE}" \
     | sed -E 's/.*[[:space:]]+AS[[:space:]]+([A-Za-z0-9_.-]+).*/\1/I' \
     | tr '\r' '\n' \
     | tr -d ' ' \
-    || true)"
+    || true
+}
 
-  # Common preferences (only if present)
+STAGES="$(detect_stages)"
+
+stage_exists() {
+  local stage="$1"
+  echo "${STAGES}" | grep -qx "${stage}"
+}
+
+# If user didn't specify --target, prefer "final" only if it exists.
+# Otherwise, omit --target entirely (build Dockerfile's last stage).
+detect_target_if_any() {
+  [[ -n "${TARGET}" ]] && return 0
+  $ALL_TARGETS && return 0
+
   for cand in final runtime comfy infer; do
-    if echo "${stages}" | grep -qx "${cand}"; then
+    if stage_exists "${cand}"; then
       TARGET="${cand}"
       return 0
     fi
   done
 
-  # No target chosen => build last stage (best default)
   TARGET=""
 }
 
@@ -137,22 +154,23 @@ echo "Load        : ${LOAD}"
 echo "No-cache    : ${NO_CACHE}"
 echo "Prune       : ${PRUNE}"
 echo "Prune-hard  : ${PRUNE_HARD}"
+echo "All-targets : ${ALL_TARGETS}"
 echo "Dockerfile  : ${DOCKERFILE}"
-echo "Target      : ${TARGET:-<default final stage>}"
+echo "Target      : ${TARGET:-<default last stage>}"
 echo "Build date  : ${BUILD_DATE}"
 echo "VCS ref     : ${VCS_REF}"
 echo "Version     : ${IMAGE_VERSION}"
 echo ""
 
-# Prune logic (optional)
+# Prune logic
 if $PRUNE_HARD; then
-  echo "== Aggressive prune (docker system prune -af) =="
+  echo "== Aggressive prune (docker system prune -af + builder prune -af) =="
   sudo docker system prune -af || true
+  sudo docker builder prune -af || true
 elif $PRUNE; then
-  echo "== Safe-ish prune (container/image/builder) =="
+  echo "== Safe-ish prune (container/image only; keep builder cache) =="
   sudo docker container prune -f || true
   sudo docker image prune -f || true
-  sudo docker builder prune -f || true
 fi
 
 echo "== Disk usage (before) =="
@@ -185,29 +203,63 @@ else
   common_buildx_args+=(--load)
 fi
 
-# Only pass --target if we actually chose one
-if [[ -n "${TARGET}" ]]; then
-  common_buildx_args+=(--target "${TARGET}")
+build_one() {
+  local image_ref="$1"
+  local target_stage="$2"
+
+  local args=("${common_buildx_args[@]}")
+
+  if [[ -n "${target_stage}" ]]; then
+    args+=(--target "${target_stage}")
+  fi
+
+  echo ""
+  echo "================================================================================"
+  echo "== Building: ${image_ref}:${TAG} (target: ${target_stage:-<default last stage>})"
+  echo "================================================================================"
+  echo ""
+
+  sudo docker buildx build \
+    -t "${image_ref}:${TAG}" \
+    "${args[@]}" \
+    "${EXTRA_BUILD_ARGS[@]}" \
+    .
+}
+
+build_all_targets() {
+  stage_exists final   || die "Stage 'final' not found in ${DOCKERFILE}"
+  stage_exists browser || die "Stage 'browser' not found in ${DOCKERFILE}"
+  stage_exists desktop || die "Stage 'desktop' not found in ${DOCKERFILE}"
+
+  build_one "${IMAGE}" "final"
+  build_one "${IMAGE}-browser" "browser"
+  build_one "${IMAGE}-desktop" "desktop"
+}
+
+if $ALL_TARGETS; then
+  build_all_targets
+else
+  build_one "${IMAGE}" "${TARGET}"
 fi
 
 echo ""
-echo "================================================================================"
-echo "== Building: ${IMAGE}:${TAG}"
-echo "================================================================================"
-echo ""
-
-sudo docker buildx build \
-  -t "${IMAGE}:${TAG}" \
-  "${common_buildx_args[@]}" \
-  "${EXTRA_BUILD_ARGS[@]}" \
-  .
-
-echo ""
 echo "== Done =="
-if $PUSH; then
-  echo "Pushed: ${IMAGE}:${TAG}"
+
+if $ALL_TARGETS; then
+  if $PUSH; then
+    echo "Pushed:"
+  else
+    echo "Built (local):"
+  fi
+  echo "  ${IMAGE}:${TAG}"
+  echo "  ${IMAGE}-browser:${TAG}"
+  echo "  ${IMAGE}-desktop:${TAG}"
 else
-  echo "Built (local): ${IMAGE}:${TAG}"
+  if $PUSH; then
+    echo "Pushed: ${IMAGE}:${TAG}"
+  else
+    echo "Built (local): ${IMAGE}:${TAG}"
+  fi
 fi
 
 echo ""
