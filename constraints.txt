@@ -1,15 +1,21 @@
 # ================================================================
 # Global indexes (critical so custom_nodes inherit the same world)
 # ================================================================
---index-url https://download.pytorch.org/whl/nightly/cu128
+--index-url https://download.pytorch.org/whl/cu128
 --extra-index-url https://pypi.org/simple
 
 # ================================================================
 # Lock torch stack (prevent nodes from pulling mismatched builds)
 # ================================================================
-torch==2.12.0.dev20260308+cu128
-torchvision==0.26.0.dev20260308+cu128
-torchaudio==2.11.0.dev20260308+cu128
+# CUDA is selected by the index above. Keep the version pins in the
+# exact installed local-version form so runtime health checks match pip freeze.
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+torchaudio==2.11.0+cu128
+# Conservative fallback if a custom node dislikes 2.11:
+# torch==2.10.0
+# torchvision==0.25.0
+# torchaudio==2.10.0
 
 # ================================================================
 # Core numerics (keep consistent with OpenCV + kornia + friends)

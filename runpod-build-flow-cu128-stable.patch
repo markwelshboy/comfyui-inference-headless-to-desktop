@@ -1,0 +1,64 @@
+diff --git a/Dockerfile b/Dockerfile
+index 567f810..c51c922 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -36,18 +36,27 @@ COPY constraints.txt /opt/constraints.txt
+ ENV PIP_CONSTRAINT=/opt/constraints.txt
+ ENV PIP_BUILD_CONSTRAINT=/opt/constraints.txt
+ 
+-# ---- Torch stack FIRST (pinned, cu128 nightly) ----
+-ARG TORCH_INDEX="https://download.pytorch.org/whl/nightly/cu128"
+-ARG TORCH_VER="2.12.0.dev20260308+cu128"
+-ARG TORCHVISION_VER="0.26.0.dev20260308+cu128"
+-ARG TORCHAUDIO_VER="2.11.0.dev20260308+cu128"
++# ---- Torch stack FIRST (pinned, stable cu128) ----
++# Keep this on a stable PyTorch release. PyTorch 2.12 removed cu128 wheels,
++# so 2.11.0 is the newest stable cu128 stack in this flow.
++# Select CUDA via the index URL; keep version pins in the official form.
++ARG TORCH_INDEX="https://download.pytorch.org/whl/cu128"
++ARG TORCH_VER="2.11.0"
++ARG TORCHVISION_VER="0.26.0"
++ARG TORCHAUDIO_VER="2.11.0"
+ 
+ RUN --mount=type=cache,target=/root/.cache/pip \
+     pip install --no-cache-dir \
+       --index-url "${TORCH_INDEX}" \
+       "torch==${TORCH_VER}" \
+       "torchvision==${TORCHVISION_VER}" \
+-      "torchaudio==${TORCHAUDIO_VER}"
++      "torchaudio==${TORCHAUDIO_VER}" \
++    && python - <<'PY'
++import torch
++print("torch:", torch.__version__)
++print("torch cuda:", torch.version.cuda)
++print("cuda available at build time:", torch.cuda.is_available())
++PY
+ 
+ # ---- Base Python runtime libs ----
+ RUN --mount=type=cache,target=/root/.cache/pip \
+diff --git a/constraints.txt b/constraints.txt
+index 5f7c92a..b099e2c 100644
+--- a/constraints.txt
++++ b/constraints.txt
+@@ -7,12 +7,15 @@
+ # ================================================================
+ # Lock torch stack (prevent nodes from pulling mismatched builds)
+ # ================================================================
+-torch==2.12.0.dev20260308+cu128
+-torchvision==0.26.0.dev20260308+cu128
+-torchaudio==2.11.0.dev20260308+cu128
+-#torch==2.11.0+cu128
+-#torchvision==0.26.0+cu128
+-#torchaudio==2.11.0+cu128
++# CUDA is selected by the index above. Keep the version pins in the
++# official PyTorch form; do not use stale nightly/dev pins here.
++torch==2.11.0
++torchvision==0.26.0
++torchaudio==2.11.0
++# Conservative fallback if a custom node dislikes 2.11:
++# torch==2.10.0
++# torchvision==0.25.0
++# torchaudio==2.10.0
+ 
+ # ================================================================
+ # Core numerics (keep consistent with OpenCV + kornia + friends)

@@ -1,0 +1,34 @@
+diff -ruN a/Dockerfile b/Dockerfile
+--- Dockerfile	2026-07-07 01:07:53.123248811 +0000
++++ Dockerfile	2026-07-07 01:07:54.184965490 +0000
+@@ -41,9 +41,9 @@
+ # so 2.11.0 is the newest stable cu128 stack in this flow.
+ # Select CUDA via the index URL; keep version pins in the official form.
+ ARG TORCH_INDEX="https://download.pytorch.org/whl/cu128"
+-ARG TORCH_VER="2.11.0"
+-ARG TORCHVISION_VER="0.26.0"
+-ARG TORCHAUDIO_VER="2.11.0"
++ARG TORCH_VER="2.11.0+cu128"
++ARG TORCHVISION_VER="0.26.0+cu128"
++ARG TORCHAUDIO_VER="2.11.0+cu128"
+ 
+ RUN --mount=type=cache,target=/root/.cache/pip \
+     pip install --no-cache-dir \
+diff -ruN a/constraints.txt b/constraints.txt
+--- constraints.txt	2026-07-07 01:07:53.123280055 +0000
++++ constraints.txt	2026-07-07 01:07:54.185333951 +0000
+@@ -8,10 +8,10 @@
+ # Lock torch stack (prevent nodes from pulling mismatched builds)
+ # ================================================================
+ # CUDA is selected by the index above. Keep the version pins in the
+-# official PyTorch form; do not use stale nightly/dev pins here.
+-torch==2.11.0
+-torchvision==0.26.0
+-torchaudio==2.11.0
++# exact installed local-version form so runtime health checks match pip freeze.
++torch==2.11.0+cu128
++torchvision==0.26.0+cu128
++torchaudio==2.11.0+cu128
+ # Conservative fallback if a custom node dislikes 2.11:
+ # torch==2.10.0
+ # torchvision==0.25.0

@@ -36,18 +36,27 @@ COPY constraints.txt /opt/constraints.txt
 ENV PIP_CONSTRAINT=/opt/constraints.txt
 ENV PIP_BUILD_CONSTRAINT=/opt/constraints.txt
 
-# ---- Torch stack FIRST (pinned, cu128 nightly) ----
-ARG TORCH_INDEX="https://download.pytorch.org/whl/nightly/cu128"
-ARG TORCH_VER="2.12.0.dev20260308+cu128"
-ARG TORCHVISION_VER="0.26.0.dev20260308+cu128"
-ARG TORCHAUDIO_VER="2.11.0.dev20260308+cu128"
+# ---- Torch stack FIRST (pinned, stable cu128) ----
+# Keep this on a stable PyTorch release. PyTorch 2.12 removed cu128 wheels,
+# so 2.11.0 is the newest stable cu128 stack in this flow.
+# Select CUDA via the index URL; keep version pins in the official form.
+ARG TORCH_INDEX="https://download.pytorch.org/whl/cu128"
+ARG TORCH_VER="2.11.0+cu128"
+ARG TORCHVISION_VER="0.26.0+cu128"
+ARG TORCHAUDIO_VER="2.11.0+cu128"
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir \
       --index-url "${TORCH_INDEX}" \
       "torch==${TORCH_VER}" \
       "torchvision==${TORCHVISION_VER}" \
-      "torchaudio==${TORCHAUDIO_VER}"
+      "torchaudio==${TORCHAUDIO_VER}" \
+    && python - <<'PY'
+import torch
+print("torch:", torch.__version__)
+print("torch cuda:", torch.version.cuda)
+print("cuda available at build time:", torch.cuda.is_available())
+PY
 
 # ---- Base Python runtime libs ----
 RUN --mount=type=cache,target=/root/.cache/pip \
