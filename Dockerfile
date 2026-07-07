@@ -7,7 +7,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_INPUT=1 \
     PIP_PREFER_BINARY=1 \
-    VENV=/opt/venv
+    VENV=/opt/venv \
+    COMFY_APP=/opt/ComfyUI \
+    COMFY_STATE=/workspace/ComfyUI \
+    COMFY_HOME=/workspace/ComfyUI \
+    COMFYUI_PATH=/opt/ComfyUI
 
 # ---- OS + Python 3.12 + core tooling ----
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -62,16 +66,16 @@ PY
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir \
       huggingface_hub==0.36.0 \
-      pyyaml tqdm pillow \
+      pyyaml tqdm pillow watchdog \
       opencv-python-headless==4.12.0.88
 
 # ---- ComfyUI clone ----
 ARG COMFYUI_REF="v0.9.2"
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git /workspace/ComfyUI \
-    && cd /workspace/ComfyUI \
+RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
+    && cd /opt/ComfyUI \
     && git checkout "${COMFYUI_REF}"
 
-WORKDIR /workspace/ComfyUI
+WORKDIR /opt/ComfyUI
 
 # Strip torch/torchvision/torchaudio from ComfyUI requirements
 RUN python - <<'PY'
@@ -96,6 +100,17 @@ PY
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -c /opt/constraints.txt -r /tmp/requirements.notorch.txt
+
+# Runtime state roots. These may be hidden/replaced by a RunPod volume,
+# which is fine because app code now lives at /opt/ComfyUI.
+RUN mkdir -p \
+      /workspace/ComfyUI/custom_nodes \
+      /workspace/ComfyUI/models \
+      /workspace/ComfyUI/input \
+      /workspace/ComfyUI/output \
+      /workspace/ComfyUI/user \
+      /workspace/ComfyUI/cache \
+      /workspace/logs
 
 COPY 4xLSDIR.pth /
 COPY src/start_script.sh /start_script.sh
