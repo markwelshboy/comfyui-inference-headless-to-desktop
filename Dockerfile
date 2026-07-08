@@ -101,13 +101,11 @@ PY
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -c /opt/constraints.txt -r /tmp/requirements.notorch.txt
 
-# Fail the test image early if this ComfyUI checkout still cannot expose Krea 2.
-RUN python - <<'PY'
-from nodes import NODE_CLASS_MAPPINGS
-clip_types = NODE_CLASS_MAPPINGS["CLIPLoader"].INPUT_TYPES()["required"]["type"][0]
-print("CLIPLoader types:", clip_types)
-assert "krea2" in clip_types, "This ComfyUI checkout does not expose CLIPLoader type krea2"
-PY
+# Do not import ComfyUI nodes at image build time: Docker builds normally have
+# no NVIDIA driver, and current ComfyUI initializes CUDA during that import.
+# This source-level check still catches stale ComfyUI refs that predate Krea 2.
+RUN git -C /opt/ComfyUI grep -n "krea2" -- . \
+    && echo "Source check passed: ComfyUI checkout contains Krea 2 support"
 
 # Runtime state roots. These may be hidden/replaced by a RunPod volume,
 # which is fine because app code now lives at /opt/ComfyUI.
