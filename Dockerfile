@@ -70,7 +70,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       opencv-python-headless==4.12.0.88
 
 # ---- ComfyUI clone ----
-ARG COMFYUI_REF="v0.9.2"
+ARG COMFYUI_REF="master"
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && cd /opt/ComfyUI \
     && git checkout "${COMFYUI_REF}"
@@ -100,6 +100,14 @@ PY
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -c /opt/constraints.txt -r /tmp/requirements.notorch.txt
+
+# Fail the test image early if this ComfyUI checkout still cannot expose Krea 2.
+RUN python - <<'PY'
+from nodes import NODE_CLASS_MAPPINGS
+clip_types = NODE_CLASS_MAPPINGS["CLIPLoader"].INPUT_TYPES()["required"]["type"][0]
+print("CLIPLoader types:", clip_types)
+assert "krea2" in clip_types, "This ComfyUI checkout does not expose CLIPLoader type krea2"
+PY
 
 # Runtime state roots. These may be hidden/replaced by a RunPod volume,
 # which is fine because app code now lives at /opt/ComfyUI.
