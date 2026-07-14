@@ -40,12 +40,11 @@ kornia==0.8.2
 # ================================================================
 huggingface-hub==0.36.0
 safetensors==0.7.0
-
-# (Optional) If you frequently install nodes that bring transformers/diffusers,
-# pin them too once you confirm versions that work for you:
-# transformers==4.57.6
-# diffusers==0.36.0
-# tokenizers==0.22.2
+transformers==4.57.6
+tokenizers==0.22.2
+accelerate==1.14.0
+diffusers==0.37.1
+sentencepiece==0.2.1
 
 # ================================================================
 # Pull in latest pip/setuptools to avoid old versions that don't understand the new metadata formats
