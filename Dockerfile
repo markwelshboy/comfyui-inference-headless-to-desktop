@@ -71,6 +71,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # ---- ComfyUI clone ----
 ARG COMFYUI_REF="master"
+ARG REQUIRE_KREA2="false"
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && cd /opt/ComfyUI \
     && git checkout "${COMFYUI_REF}"
@@ -103,9 +104,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Do not import ComfyUI nodes at image build time: Docker builds normally have
 # no NVIDIA driver, and current ComfyUI initializes CUDA during that import.
-# This source-level check still catches stale ComfyUI refs that predate Krea 2.
-RUN git -C /opt/ComfyUI grep -n "krea2" -- . \
-    && echo "Source check passed: ComfyUI checkout contains Krea 2 support"
+# This optional source-level check catches stale ComfyUI refs that predate Krea 2
+# while still allowing stable/non-Krea builds from older known-good refs.
+RUN if [ "${REQUIRE_KREA2}" = "true" ]; then \
+      git -C /opt/ComfyUI grep -n "krea2" -- . \
+      && echo "Source check passed: ComfyUI checkout contains Krea 2 support"; \
+    else \
+      echo "Skipping Krea 2 source check (REQUIRE_KREA2=${REQUIRE_KREA2})"; \
+    fi
 
 # Runtime state roots. These may be hidden/replaced by a RunPod volume,
 # which is fine because app code now lives at /opt/ComfyUI.
