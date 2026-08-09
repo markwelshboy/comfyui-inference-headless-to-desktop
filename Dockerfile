@@ -70,7 +70,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       opencv-python-headless==4.12.0.88
 
 # ---- ComfyUI clone ----
-ARG COMFYUI_REF="v0.9.2"
+ARG COMFYUI_REF="master"
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI \
     && cd /opt/ComfyUI \
     && git checkout "${COMFYUI_REF}"
@@ -100,6 +100,12 @@ PY
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir -c /opt/constraints.txt -r /tmp/requirements.notorch.txt
+
+# Do not import ComfyUI nodes at image build time: Docker builds normally have
+# no NVIDIA driver, and current ComfyUI initializes CUDA during that import.
+# This source-level check still catches stale ComfyUI refs that predate Krea 2.
+RUN git -C /opt/ComfyUI grep -n "krea2" -- . \
+    && echo "Source check passed: ComfyUI checkout contains Krea 2 support"
 
 # Runtime state roots. These may be hidden/replaced by a RunPod volume,
 # which is fine because app code now lives at /opt/ComfyUI.
