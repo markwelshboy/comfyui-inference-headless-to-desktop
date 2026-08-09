@@ -4,15 +4,16 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./build_comfy_infer.sh [options]
+  ./build_comfy-inference.sh [options]
 
-Options:
-  --no-push              Do not push (default: push)
-  --load                 Load into local docker (implies --no-push)
+Build/output:
+  --builder <name>        Buildx builder. Default: buildkit-scratch
+  --no-push              Build/cache only; do not push or load into Docker
+  --load                 Load into local Docker instead of pushing
   --platform <plats>     Default: linux/amd64
   --no-cache             Disable build cache
-  --prune                Safe-ish prune before build (keeps builder cache)
-  --prune-hard           Aggressive prune before build (includes builder cache)
+  --prune                Prune stopped containers and dangling Docker images
+  --prune-hard           Aggressively prune cache from the selected Buildx builder
   --all-targets          Build final, browser, and desktop targets
 
 Tagging:
@@ -21,8 +22,8 @@ Tagging:
 
 Target stage:
   --target <stage>       Build a specific Dockerfile stage (optional).
-                         If omitted, script will prefer 'final' if it exists,
-                         otherwise builds the Dockerfile's last stage.
+                         If omitted, prefer 'final' if it exists; otherwise
+                         build the Dockerfile's last stage.
                          Ignored when --all-targets is used.
 
 Metadata:
@@ -31,26 +32,25 @@ Metadata:
   --vcs-ref <sha>        Default: git rev-parse --short HEAD or "unknown"
 
 Pass-through:
-  --build-arg KEY=VALUE  Repeatable.
+  --build-arg KEY=VALUE  Repeatable
   --dockerfile <path>    Default: Dockerfile
 
 Examples:
-  ./build_comfy_infer.sh
-  ./build_comfy_infer.sh --no-push
-  ./build_comfy_infer.sh --load
-  ./build_comfy_infer.sh --target browser --no-push
-  ./build_comfy_infer.sh --all-targets
-  ./build_comfy_infer.sh --all-targets --push
+  ./build_comfy-inference.sh
+  ./build_comfy-inference.sh --no-push
+  ./build_comfy-inference.sh --load --tag test
+  ./build_comfy-inference.sh --target browser --no-push
+  ./build_comfy-inference.sh --all-targets
 EOF
 }
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-# Defaults
 IMAGE="markwelshboy/comfyui-inference"
 TAG="latest"
 DOCKERFILE="Dockerfile"
+BUILDER="${BUILDX_BUILDER:-buildkit-scratch}"
 
 PUSH=true
 LOAD=false
@@ -59,18 +59,16 @@ NO_CACHE=false
 PRUNE=false
 PRUNE_HARD=false
 ALL_TARGETS=false
-
 TARGET=""
 
 IMAGE_VERSION="1.0.0"
 BUILD_DATE=""
 VCS_REF=""
-
 EXTRA_BUILD_ARGS=()
 
-# Parse args
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --builder) [[ -n "${2:-}" ]] || die "--builder requires a value"; BUILDER="$2"; shift 2 ;;
     --no-push) PUSH=false; shift ;;
     --load) LOAD=true; PUSH=false; shift ;;
     --platform) [[ -n "${2:-}" ]] || die "--platform requires a value"; PLATFORM="$2"; shift 2 ;;
@@ -92,18 +90,20 @@ while [[ $# -gt 0 ]]; do
 done
 
 have_cmd docker || die "docker not found"
-sudo docker buildx version >/dev/null 2>&1 || die "docker buildx not available"
+docker info >/dev/null 2>&1 || die "Docker is not accessible as the current user"
+docker buildx version >/dev/null 2>&1 || die "docker buildx not available"
+docker buildx inspect "${BUILDER}" >/dev/null 2>&1 || die "Buildx builder '${BUILDER}' not found or unavailable"
 [[ -f "${DOCKERFILE}" ]] || die "Dockerfile not found: ${DOCKERFILE}"
 
 if $ALL_TARGETS && [[ -n "${TARGET}" ]]; then
   die "--target cannot be used together with --all-targets"
 fi
 
-# Metadata defaults
-if [[ -z "${BUILD_DATE}" ]]; then
-  BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if $LOAD && [[ "${PLATFORM}" == *,* ]]; then
+  die "--load supports a single platform only"
 fi
 
+[[ -n "${BUILD_DATE}" ]] || BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if [[ -z "${VCS_REF}" ]]; then
   if have_cmd git && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     VCS_REF="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
@@ -112,7 +112,6 @@ if [[ -z "${VCS_REF}" ]]; then
   fi
 fi
 
-# Discover stages
 detect_stages() {
   grep -E '^[[:space:]]*FROM[[:space:]].*[[:space:]]+AS[[:space:]]+' "${DOCKERFILE}" \
     | sed -E 's/.*[[:space:]]+AS[[:space:]]+([A-Za-z0-9_.-]+).*/\1/I' \
@@ -122,68 +121,59 @@ detect_stages() {
 }
 
 STAGES="$(detect_stages)"
+stage_exists() { echo "${STAGES}" | grep -qx "$1"; }
 
-stage_exists() {
-  local stage="$1"
-  echo "${STAGES}" | grep -qx "${stage}"
-}
-
-# If user didn't specify --target, prefer "final" only if it exists.
-# Otherwise, omit --target entirely (build Dockerfile's last stage).
-detect_target_if_any() {
-  [[ -n "${TARGET}" ]] && return 0
-  $ALL_TARGETS && return 0
-
+if [[ -z "${TARGET}" ]] && ! $ALL_TARGETS; then
   for cand in final runtime comfy infer; do
     if stage_exists "${cand}"; then
       TARGET="${cand}"
-      return 0
+      break
     fi
   done
+fi
 
-  TARGET=""
+cat <<SUMMARY
+== Build settings ==
+Image       : ${IMAGE}:${TAG}
+Builder     : ${BUILDER}
+Platform    : ${PLATFORM}
+Push        : ${PUSH}
+Load        : ${LOAD}
+No-cache    : ${NO_CACHE}
+Prune       : ${PRUNE}
+Prune-hard  : ${PRUNE_HARD}
+All-targets : ${ALL_TARGETS}
+Dockerfile  : ${DOCKERFILE}
+Target      : ${TARGET:-<default last stage>}
+Build date  : ${BUILD_DATE}
+VCS ref     : ${VCS_REF}
+Version     : ${IMAGE_VERSION}
+SUMMARY
+
+if $PRUNE_HARD; then
+  echo "== Aggressive BuildKit cache prune: ${BUILDER} =="
+  docker buildx prune --builder "${BUILDER}" --all --force || true
+elif $PRUNE; then
+  echo "== Safe Docker Engine prune =="
+  docker container prune -f || true
+  docker image prune -f || true
+fi
+
+show_usage() {
+  echo "== Docker Engine usage =="
+  docker system df || true
+  echo
+  echo "== BuildKit cache: ${BUILDER} =="
+  docker buildx du --builder "${BUILDER}" || true
+  echo
+  echo "== Filesystems =="
+  df -h / /var /srv/buildkit 2>/dev/null || df -h
 }
 
-detect_target_if_any
-
-echo "== Build settings =="
-echo "Image       : ${IMAGE}:${TAG}"
-echo "Platform    : ${PLATFORM}"
-echo "Push        : ${PUSH}"
-echo "Load        : ${LOAD}"
-echo "No-cache    : ${NO_CACHE}"
-echo "Prune       : ${PRUNE}"
-echo "Prune-hard  : ${PRUNE_HARD}"
-echo "All-targets : ${ALL_TARGETS}"
-echo "Dockerfile  : ${DOCKERFILE}"
-echo "Target      : ${TARGET:-<default last stage>}"
-echo "Build date  : ${BUILD_DATE}"
-echo "VCS ref     : ${VCS_REF}"
-echo "Version     : ${IMAGE_VERSION}"
-echo ""
-
-# Prune logic
-if $PRUNE_HARD; then
-  echo "== Aggressive prune (docker system prune -af + builder prune -af) =="
-  sudo docker system prune -af || true
-  sudo docker builder prune -af || true
-elif $PRUNE; then
-  echo "== Safe-ish prune (container/image only; keep builder cache) =="
-  sudo docker container prune -f || true
-  sudo docker image prune -f || true
-fi
-
-echo "== Disk usage (before) =="
-sudo docker system df || true
-df -h || true
-echo ""
-
-# Ensure buildx builder exists & is selected
-if ! sudo docker buildx inspect >/dev/null 2>&1; then
-  sudo docker buildx create --use --name default >/dev/null
-fi
+show_usage
 
 common_buildx_args=(
+  --builder "${BUILDER}"
   -f "${DOCKERFILE}"
   --platform "${PLATFORM}"
   --build-arg "BUILD_DATE=${BUILD_DATE}"
@@ -191,78 +181,51 @@ common_buildx_args=(
   --build-arg "IMAGE_VERSION=${IMAGE_VERSION}"
 )
 
-if $NO_CACHE; then
-  common_buildx_args+=(--no-cache)
-fi
-
+$NO_CACHE && common_buildx_args+=(--no-cache)
 if $PUSH; then
   common_buildx_args+=(--push)
 elif $LOAD; then
-  common_buildx_args+=(--load)
-else
   common_buildx_args+=(--load)
 fi
 
 build_one() {
   local image_ref="$1"
   local target_stage="$2"
-
   local args=("${common_buildx_args[@]}")
 
-  if [[ -n "${target_stage}" ]]; then
-    args+=(--target "${target_stage}")
-  fi
+  [[ -z "${target_stage}" ]] || args+=(--target "${target_stage}")
 
-  echo ""
+  echo
   echo "================================================================================"
   echo "== Building: ${image_ref}:${TAG} (target: ${target_stage:-<default last stage>})"
   echo "================================================================================"
-  echo ""
+  echo
 
-  sudo docker buildx build \
+  docker buildx build \
     -t "${image_ref}:${TAG}" \
     "${args[@]}" \
     "${EXTRA_BUILD_ARGS[@]}" \
     .
 }
 
-build_all_targets() {
+if $ALL_TARGETS; then
   stage_exists final   || die "Stage 'final' not found in ${DOCKERFILE}"
   stage_exists browser || die "Stage 'browser' not found in ${DOCKERFILE}"
   stage_exists desktop || die "Stage 'desktop' not found in ${DOCKERFILE}"
-
   build_one "${IMAGE}" "final"
   build_one "${IMAGE}-browser" "browser"
   build_one "${IMAGE}-desktop" "desktop"
-}
-
-if $ALL_TARGETS; then
-  build_all_targets
 else
   build_one "${IMAGE}" "${TARGET}"
 fi
 
-echo ""
-echo "== Done =="
-
-if $ALL_TARGETS; then
-  if $PUSH; then
-    echo "Pushed:"
-  else
-    echo "Built (local):"
-  fi
-  echo "  ${IMAGE}:${TAG}"
-  echo "  ${IMAGE}-browser:${TAG}"
-  echo "  ${IMAGE}-desktop:${TAG}"
+echo
+if $PUSH; then
+  echo "Build complete and pushed."
+elif $LOAD; then
+  echo "Build complete and loaded into local Docker."
 else
-  if $PUSH; then
-    echo "Pushed: ${IMAGE}:${TAG}"
-  else
-    echo "Built (local): ${IMAGE}:${TAG}"
-  fi
+  echo "Build complete; result was not pushed or loaded and remains in BuildKit cache."
 fi
 
-echo ""
-echo "== Disk usage (after) =="
-sudo docker system df || true
-df -h || true
+show_usage
