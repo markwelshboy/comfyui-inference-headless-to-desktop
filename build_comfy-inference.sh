@@ -27,7 +27,7 @@ Target stage:
 
 Metadata:
   --image-version <v>    Default: 1.0.0
-  --build-date <iso>     Default: now UTC
+  --build-date <iso>     Default: current Git commit timestamp
   --vcs-ref <sha>        Default: git rev-parse --short HEAD or "unknown"
 
 Pass-through:
@@ -99,9 +99,14 @@ if $ALL_TARGETS && [[ -n "${TARGET}" ]]; then
   die "--target cannot be used together with --all-targets"
 fi
 
-# Metadata defaults
+# Keep metadata deterministic for a given source commit. A wall-clock build
+# timestamp changes on every invocation and needlessly destroys cache reuse in
+# Dockerfiles that consume BUILD_DATE.
 if [[ -z "${BUILD_DATE}" ]]; then
-  BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if have_cmd git && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    BUILD_DATE="$(git show -s --format=%cI HEAD 2>/dev/null || true)"
+  fi
+  [[ -n "${BUILD_DATE}" ]] || BUILD_DATE="unknown"
 fi
 
 if [[ -z "${VCS_REF}" ]]; then
