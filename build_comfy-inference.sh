@@ -6,6 +6,13 @@ usage() {
 Usage:
   ./build_comfy-inference.sh [options]
 
+Profiles:
+  --krea2                Build the current Krea2 stack. Resolves ComfyUI
+                         master to its current commit SHA, enables the Krea2
+                         source check, and defaults the image tag to 'krea2'.
+                         Without --krea2, defaults to ComfyUI v0.9.2 and tag
+                         'stable'. An explicit --tag overrides either default.
+
 Build/output:
   --builder <name>        Buildx builder. Default: buildkit-scratch
   --no-push              Build/cache only; do not push or load into Docker
@@ -13,12 +20,12 @@ Build/output:
   --platform <plats>     Default: linux/amd64
   --no-cache             Disable build cache
   --prune                Prune stopped containers and dangling Docker images
-  --prune-hard           Aggressively prune cache from the selected Buildx builder
+  --prune-hard            Aggressively prune cache from the selected Buildx builder
   --all-targets          Build final, browser, and desktop targets
 
 Tagging:
   --image <repo/name>    Default: markwelshboy/comfyui-inference
-  --tag <tag>            Default: latest
+  --tag <tag>            Default: stable; krea2 when --krea2 is selected
 
 Target stage:
   --target <stage>       Build a specific Dockerfile stage (optional).
@@ -37,7 +44,9 @@ Pass-through:
 
 Examples:
   ./build_comfy-inference.sh
-  ./build_comfy-inference.sh --no-push
+  ./build_comfy-inference.sh --krea2
+  ./build_comfy-inference.sh --krea2 --tag dev
+  ./build_comfy-inference.sh --tag stable-test --no-push
   ./build_comfy-inference.sh --load --tag test
   ./build_comfy-inference.sh --target browser --no-push
   ./build_comfy-inference.sh --all-targets
@@ -48,7 +57,9 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 IMAGE="markwelshboy/comfyui-inference"
-TAG="latest"
+TAG="stable"
+TAG_EXPLICIT=false
+KREA2=false
 DOCKERFILE="Dockerfile"
 BUILDER="${BUILDX_BUILDER:-buildkit-scratch}"
 
@@ -68,6 +79,7 @@ EXTRA_BUILD_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --krea2) KREA2=true; shift ;;
     --builder) [[ -n "${2:-}" ]] || die "--builder requires a value"; BUILDER="$2"; shift 2 ;;
     --no-push) PUSH=false; shift ;;
     --load) LOAD=true; PUSH=false; shift ;;
@@ -77,7 +89,7 @@ while [[ $# -gt 0 ]]; do
     --prune-hard) PRUNE_HARD=true; shift ;;
     --all-targets) ALL_TARGETS=true; shift ;;
     --image) [[ -n "${2:-}" ]] || die "--image requires a value"; IMAGE="$2"; shift 2 ;;
-    --tag) [[ -n "${2:-}" ]] || die "--tag requires a value"; TAG="$2"; shift 2 ;;
+    --tag) [[ -n "${2:-}" ]] || die "--tag requires a value"; TAG="$2"; TAG_EXPLICIT=true; shift 2 ;;
     --dockerfile) [[ -n "${2:-}" ]] || die "--dockerfile requires a path"; DOCKERFILE="$2"; shift 2 ;;
     --target) [[ -n "${2:-}" ]] || die "--target requires a stage name"; TARGET="$2"; shift 2 ;;
     --image-version) [[ -n "${2:-}" ]] || die "--image-version requires a value"; IMAGE_VERSION="$2"; shift 2 ;;
@@ -101,6 +113,26 @@ fi
 
 if $LOAD && [[ "${PLATFORM}" == *,* ]]; then
   die "--load supports a single platform only"
+fi
+
+# Resolve the ComfyUI profile before building. For Krea2, pin the current
+# upstream master SHA so BuildKit sees a new COMFYUI_REF only when upstream
+# actually changes, while repeated builds of the same SHA remain cacheable.
+if $KREA2; then
+  $TAG_EXPLICIT || TAG="krea2"
+  have_cmd git || die "git is required to resolve the current ComfyUI master for --krea2"
+  COMFYUI_REF="$(
+    git ls-remote https://github.com/comfyanonymous/ComfyUI.git refs/heads/master \
+      | awk 'NR == 1 {print $1}'
+  )"
+  [[ "${COMFYUI_REF}" =~ ^[0-9a-fA-F]{40}$ ]] \
+    || die "Unable to resolve ComfyUI master commit from GitHub"
+  REQUIRE_KREA2="true"
+  BUILD_PROFILE="krea2"
+else
+  COMFYUI_REF="v0.9.2"
+  REQUIRE_KREA2="false"
+  BUILD_PROFILE="stable"
 fi
 
 # Keep metadata deterministic for a given source commit. A wall-clock build
@@ -144,6 +176,9 @@ fi
 cat <<SUMMARY
 == Build settings ==
 Image       : ${IMAGE}:${TAG}
+Profile     : ${BUILD_PROFILE}
+ComfyUI ref : ${COMFYUI_REF}
+Krea2 check : ${REQUIRE_KREA2}
 Builder     : ${BUILDER}
 Platform    : ${PLATFORM}
 Push        : ${PUSH}
@@ -185,6 +220,8 @@ common_buildx_args=(
   --builder "${BUILDER}"
   -f "${DOCKERFILE}"
   --platform "${PLATFORM}"
+  --build-arg "COMFYUI_REF=${COMFYUI_REF}"
+  --build-arg "REQUIRE_KREA2=${REQUIRE_KREA2}"
   --build-arg "BUILD_DATE=${BUILD_DATE}"
   --build-arg "VCS_REF=${VCS_REF}"
   --build-arg "IMAGE_VERSION=${IMAGE_VERSION}"
