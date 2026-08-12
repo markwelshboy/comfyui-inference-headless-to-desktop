@@ -12,6 +12,9 @@ Profiles:
                          source check, and defaults the image tag to 'krea2'.
                          Without --krea2, defaults to ComfyUI v0.9.2 and tag
                          'stable'. An explicit --tag overrides either default.
+  --comfyui-ref <ref>    Override the ComfyUI revision/tag/SHA used by the
+                         selected profile. With --krea2 this skips master
+                         resolution but still enables the Krea2 source check.
 
 Build/output:
   --builder <name>        Buildx builder. Default: buildkit-scratch
@@ -20,7 +23,7 @@ Build/output:
   --platform <plats>     Default: linux/amd64
   --no-cache             Disable build cache
   --prune                Prune stopped containers and dangling Docker images
-  --prune-hard            Aggressively prune cache from the selected Buildx builder
+  --prune-hard           Aggressively prune cache from the selected Buildx builder
   --all-targets          Build final, browser, and desktop targets
 
 Tagging:
@@ -45,6 +48,7 @@ Pass-through:
 Examples:
   ./build_comfy-inference.sh
   ./build_comfy-inference.sh --krea2
+  ./build_comfy-inference.sh --krea2 --comfyui-ref v0.30.0
   ./build_comfy-inference.sh --krea2 --tag dev
   ./build_comfy-inference.sh --tag stable-test --no-push
   ./build_comfy-inference.sh --load --tag test
@@ -60,6 +64,7 @@ IMAGE="markwelshboy/comfyui-inference"
 TAG="stable"
 TAG_EXPLICIT=false
 KREA2=false
+COMFYUI_REF_OVERRIDE=""
 DOCKERFILE="Dockerfile"
 BUILDER="${BUILDX_BUILDER:-buildkit-scratch}"
 
@@ -80,6 +85,7 @@ EXTRA_BUILD_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --krea2) KREA2=true; shift ;;
+    --comfyui-ref) [[ -n "${2:-}" ]] || die "--comfyui-ref requires a value"; COMFYUI_REF_OVERRIDE="$2"; shift 2 ;;
     --builder) [[ -n "${2:-}" ]] || die "--builder requires a value"; BUILDER="$2"; shift 2 ;;
     --no-push) PUSH=false; shift ;;
     --load) LOAD=true; PUSH=false; shift ;;
@@ -118,19 +124,25 @@ fi
 # Resolve the ComfyUI profile before building. For Krea2, pin the current
 # upstream master SHA so BuildKit sees a new COMFYUI_REF only when upstream
 # actually changes, while repeated builds of the same SHA remain cacheable.
+# An explicit --comfyui-ref takes precedence and skips remote resolution.
 if $KREA2; then
   $TAG_EXPLICIT || TAG="krea2"
-  have_cmd git || die "git is required to resolve the current ComfyUI master for --krea2"
-  COMFYUI_REF="$(
-    git ls-remote https://github.com/comfyanonymous/ComfyUI.git refs/heads/master \
-      | awk 'NR == 1 {print $1}'
-  )"
-  [[ "${COMFYUI_REF}" =~ ^[0-9a-fA-F]{40}$ ]] \
-    || die "Unable to resolve ComfyUI master commit from GitHub"
   REQUIRE_KREA2="true"
   BUILD_PROFILE="krea2"
+
+  if [[ -n "${COMFYUI_REF_OVERRIDE}" ]]; then
+    COMFYUI_REF="${COMFYUI_REF_OVERRIDE}"
+  else
+    have_cmd git || die "git is required to resolve the current ComfyUI master for --krea2"
+    COMFYUI_REF="$(
+      git ls-remote https://github.com/comfyanonymous/ComfyUI.git refs/heads/master \
+        | awk 'NR == 1 {print $1}'
+    )"
+    [[ "${COMFYUI_REF}" =~ ^[0-9a-fA-F]{40}$ ]] \
+      || die "Unable to resolve ComfyUI master commit from GitHub"
+  fi
 else
-  COMFYUI_REF="v0.9.2"
+  COMFYUI_REF="${COMFYUI_REF_OVERRIDE:-v0.9.2}"
   REQUIRE_KREA2="false"
   BUILD_PROFILE="stable"
 fi
